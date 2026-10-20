@@ -1,102 +1,70 @@
-# CSR HID-proxy dongle tools
+# CSR HID-proxy dongle (USB `0a12:100b`)
 
-Tools to configure a CSR 8510-based Bluetooth "HID proxy" USB dongle (USB ID `0a12:100b`), the kind
-used with this fork's `CONFIG_ZMK_BLE_DONGLE_COMPAT_PROFILE` option. Both send the dongle vendor's
-two HID "SET FEATURE" commands (see the vendor's
-[Windows](https://github.com/chancefavorsthepreparedmind/csr_clear_pairings_cmd) and
-[Linux](https://github.com/chancefavorsthepreparedmind/csr_clear_pairings_cmd-linux) sources).
+BLE-to-USB dongle used with `CONFIG_ZMK_BLE_DONGLE_COMPAT_PROFILE`. Typing works through it;
+mouse and media keys don't.
 
-| Option | Effect |
-|---|---|
-| `-clear_pairings` | Forget all Bluetooth devices paired to the dongle |
-| `-hid2hci` | Switch the dongle to a plain Bluetooth adapter (HCI mode); unplug/replug to go back to HID proxy mode |
-| `-version` | Show the tool version (Windows tool) |
+## Clear the dongle's pairing
 
-## Windows (recommended): `btusbcmd.exe`
+Then unplug and replug the dongle.
 
-The vendor's own tool. In **Windows Terminal** (PowerShell or Command Prompt), with the dongle
-plugged in:
+### Windows
 
 ```powershell
 curl.exe -LO https://raw.githubusercontent.com/Micmonta/zmk/main/extras/csr-hid-proxy/btusbcmd.exe
 .\btusbcmd.exe -clear_pairings
 ```
 
-## macOS / Linux: `csr_dongle.py`
-
-Sends the vendor's two feature-report commands to the dongle's keyboard interface (interface 0),
-which is where `btusbcmd.exe` (via the Windows HID driver) and the vendor's Linux tool send them.
-It first tries while the OS keeps its HID driver on that interface; if the OS refuses, it
-detaches the driver for the moment of the request (needs `sudo`) and gives it back. It uses the
-`libusb` C library directly (no pip packages needed):
+### macOS
 
 ```bash
-brew install libusb        # Linux: sudo apt install libusb-1.0-0
+brew install libusb
 curl -LO https://raw.githubusercontent.com/Micmonta/zmk/main/extras/csr-hid-proxy/csr_dongle.py
-python3 csr_dongle.py -clear_pairings      # if it says to: sudo python3 csr_dongle.py -clear_pairings
+python3 csr_dongle.py -clear_pairings
 ```
 
-Then unplug and replug the dongle. One of the two variants (`report 1` / `report 0`) being
-rejected is normal; the dongle only accepts the one matching its configuration.
+Works without sudo. Success = a line with `ok` (the other variant failing is normal).
 
-> [!NOTE]
-> Not yet confirmed on a Mac. Addressing the commands to the device as a whole (previous version)
-> is rejected by the dongle (`LIBUSB_ERROR_PIPE`); addressing them to the mouse interface (first
-> version) left the dongle in a bad state. If this misbehaves, use `btusbcmd.exe` on Windows.
+### Linux (untested)
 
-## Using the dongle with a ZMK keyboard (`CONFIG_ZMK_BLE_DONGLE_COMPAT_PROFILE`)
-
-In the keyboard's central `.conf` (e.g. `config/toucan_left.conf`):
-
-```
-CONFIG_ZMK_BLE_DONGLE_COMPAT_PROFILE=4   # BLE profile 5 (0-based index 4)
+```bash
+sudo apt install libusb-1.0-0
+curl -LO https://raw.githubusercontent.com/Micmonta/zmk/main/extras/csr-hid-proxy/csr_dongle.py
+sudo python3 csr_dongle.py -clear_pairings
 ```
 
-For that profile only, the keyboard accepts the dongle's legacy "Just Works" pairing; every other
-profile still requires LE Secure Connections. Don't also set
-`CONFIG_ZMK_BLE_EXPERIMENTAL_PAIR_JUST_WORKS` (that allows legacy pairing on every profile).
-The status screen shows `HID` on that profile.
+`-hid2hci` instead of `-clear_pairings` switches the dongle to a plain Bluetooth adapter until
+replugged.
 
-**Typing works. Mouse input (trackpad / mouse keys) and media keys don't**, and can't be fixed
-from the keyboard side:
+## Keyboard config
 
-- The dongle remembers exactly one Bluetooth device
-  ([Laird BT800 HID proxy app note](http://cdn.lairdtech.com/home/brandworld/files/Application%20Note%20-%20BT800%20Series%20HID%20Proxy.pdf),
-  same CSR firmware family).
-- USB-logging captures showed it never reads the HID report map. At pairing it looks for the Boot
-  Keyboard Input characteristic and, only if there is none, the Boot Mouse Input characteristic,
-  and treats the device as *either* a keyboard *or* a mouse. With no boot characteristics it uses
-  report ID 1 as a standard keyboard report.
-- Every mouse variant tried was received by the dongle and dropped: ZMK's mouse report, report
-  ID 2 in the dongle's USB mouse layout, boot mouse reports (3 and 4 bytes) with the dongle in
-  keyboard mode and in mouse mode, and report-mode mouse data in mouse mode (where it only
-  subscribes to the boot mouse characteristic).
-- Its USB side has no consumer (media key) interface.
+`config/toucan_left.conf`:
 
-### Pairing
+```
+CONFIG_ZMK_BLE_DONGLE_COMPAT_PROFILE=4   # profile 5
+```
 
-**Always clear both sides.** ZMK refuses a new pairing on a profile that still remembers the
-dongle, so after clearing the dongle the keyboard's profile must be cleared too (otherwise the
-dongle connects, the screen shows `HID`, but no keys are sent).
+Allows the dongle's legacy pairing on profile 5 only. Screen shows `HID` on that profile.
 
-1. Clear the dongle: `.\btusbcmd.exe -clear_pairings` (Windows) or `python3 csr_dongle.py -clear_pairings`.
-2. Unplug and replug the dongle.
-3. On the keyboard: select profile 5 and clear it (`&bt BT_SEL 4` + `&bt BT_CLR`, or a `bt4clear`
-   macro), and **stay on profile 5**. Legacy pairing is only accepted while that profile is selected.
-4. Let the dongle pair, then test typing and a BIOS/boot screen.
+## Pairing
 
-To move the dongle to another keyboard, do the same steps with that keyboard (and clear profile 5 on
-the old one if you later want it back on the dongle).
+1. Clear the dongle (above) and replug it.
+2. On the Toucan: profile 5, clear it, stay on it.
+3. Wait for it to pair; test typing.
 
-### Troubleshooting
+If the screen shows `HID` but nothing types: repeat 1–2 (both sides must be cleared).
 
-| Result | Meaning / next step |
-|---|---|
-| Screen shows `HID` but nothing types | The pairing didn't complete: clear both sides again (steps 1–3) |
-| Typing works, trackpad / mouse keys / media keys don't | Expected: the dongle only supports one device type per pairing (see above) |
-| Right-half battery icon disappears on profile 5 | Not investigated yet (likely the left/right link briefly dropping when the dongle connects) |
+## Why no mouse
 
-### Rollback
+- The dongle remembers one device and treats it as either a keyboard or a mouse, decided at
+  pairing by the Boot Keyboard / Boot Mouse characteristics. It never reads the report map.
+- No mouse format got through (report IDs 2/3, boot mouse 3/4 bytes, keyboard or mouse mode).
+- No media-key interface on its USB side.
+- Same firmware family: [Laird BT800 HID proxy app note](http://cdn.lairdtech.com/home/brandworld/files/Application%20Note%20-%20BT800%20Series%20HID%20Proxy.pdf).
 
-Flash the previous `.uf2`, or replace `CONFIG_ZMK_BLE_DONGLE_COMPAT_PROFILE=4` with
-`CONFIG_ZMK_BLE_EXPERIMENTAL_PAIR_JUST_WORKS=y` (the previous behaviour) and rebuild.
+## Clear command details
+
+Both tools send HID SET_REPORT (Feature) to interface 0: report 1 `01 06 00…` (9 bytes) and
+report 0 `06 00…` (8 bytes); `05` instead of `06` = hid2hci. The dongle rejects it on interface 1
+or addressed to the whole device. Vendor sources:
+[Windows](https://github.com/chancefavorsthepreparedmind/csr_clear_pairings_cmd),
+[Linux](https://github.com/chancefavorsthepreparedmind/csr_clear_pairings_cmd-linux).
