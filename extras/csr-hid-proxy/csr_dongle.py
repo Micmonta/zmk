@@ -113,7 +113,12 @@ def main() -> int:
         dev = lib.hid_open_path(path)
         if dev:
             break
-        print(f"  could not open interface {iface}: {lib.hid_error(None)}")
+        if sys.platform == "darwin" and iface == 0:
+            # macOS keeps the keyboard interface locked; the dongle also accepts the commands on
+            # its other interface (verified: clear_pairings works via interface 1).
+            print("  interface 0 is locked by macOS (normal), trying the next interface...")
+        else:
+            print(f"  could not open interface {iface}: {lib.hid_error(None)}")
     if not dev:
         print("Could not open the dongle. On macOS, allow your terminal app under "
               "System Settings -> Privacy & Security -> Input Monitoring (then quit and reopen the "
