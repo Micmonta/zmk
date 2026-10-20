@@ -24,24 +24,25 @@ curl.exe -LO https://raw.githubusercontent.com/Micmonta/zmk/main/extras/csr-hid-
 
 ## macOS / Linux: `csr_dongle.py`
 
-Sends exactly the same USB requests as `btusbcmd.exe`: two control transfers addressed to the
-dongle as a whole (not to its keyboard interface), so nothing has to be detached or claimed and
-macOS locking the keyboard interface doesn't matter. It uses the `libusb` C library directly (no
-pip packages needed):
+Sends the vendor's two feature-report commands to the dongle's keyboard interface (interface 0),
+which is where `btusbcmd.exe` (via the Windows HID driver) and the vendor's Linux tool send them.
+It first tries while the OS keeps its HID driver on that interface; if the OS refuses, it
+detaches the driver for the moment of the request (needs `sudo`) and gives it back. It uses the
+`libusb` C library directly (no pip packages needed):
 
 ```bash
 brew install libusb        # Linux: sudo apt install libusb-1.0-0
 curl -LO https://raw.githubusercontent.com/Micmonta/zmk/main/extras/csr-hid-proxy/csr_dongle.py
-python3 csr_dongle.py -clear_pairings      # Linux: sudo python3 csr_dongle.py -clear_pairings
+python3 csr_dongle.py -clear_pairings      # if it says to: sudo python3 csr_dongle.py -clear_pairings
 ```
 
-Then unplug and replug the dongle. One of the two requests being rejected is normal (the dongle
-only accepts the variant that matches its configuration).
+Then unplug and replug the dongle. One of the two variants (`report 1` / `report 0`) being
+rejected is normal; the dongle only accepts the one matching its configuration.
 
 > [!NOTE]
-> The macOS version is new and not yet confirmed on real hardware. An earlier hidapi-based version
-> sent the commands to the dongle's mouse interface instead, which left the dongle in a bad state;
-> if this one misbehaves, fall back to `btusbcmd.exe` on Windows.
+> Not yet confirmed on a Mac. Addressing the commands to the device as a whole (previous version)
+> is rejected by the dongle (`LIBUSB_ERROR_PIPE`); addressing them to the mouse interface (first
+> version) left the dongle in a bad state. If this misbehaves, use `btusbcmd.exe` on Windows.
 
 ## Using the dongle with a ZMK keyboard (`CONFIG_ZMK_BLE_DONGLE_COMPAT_PROFILE`)
 
