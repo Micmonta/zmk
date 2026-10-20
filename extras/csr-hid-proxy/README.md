@@ -22,24 +22,26 @@ curl.exe -LO https://raw.githubusercontent.com/Micmonta/zmk/main/extras/csr-hid-
 .\btusbcmd.exe -clear_pairings
 ```
 
-## macOS / Linux: `csr_dongle.py` (experimental, may not work)
+## macOS / Linux: `csr_dongle.py`
 
-> [!WARNING]
-> On macOS this may not work properly. macOS locks the dongle's keyboard interface (0), so the
-> script can only send the commands to interface 1. In testing that made the dongle forget its
-> pairings, but keyboards re-paired afterwards connected without sending any keys until the dongle
-> was cleared again with `btusbcmd.exe` on Windows. Prefer the Windows tool.
-
-It uses the `hidapi` C library directly (no pip packages needed):
+Sends exactly the same USB requests as `btusbcmd.exe`: two control transfers addressed to the
+dongle as a whole (not to its keyboard interface), so nothing has to be detached or claimed and
+macOS locking the keyboard interface doesn't matter. It uses the `libusb` C library directly (no
+pip packages needed):
 
 ```bash
-brew install hidapi        # Linux: sudo apt install libhidapi-hidraw0
+brew install libusb        # Linux: sudo apt install libusb-1.0-0
 curl -LO https://raw.githubusercontent.com/Micmonta/zmk/main/extras/csr-hid-proxy/csr_dongle.py
-python3 csr_dongle.py -clear_pairings
+python3 csr_dongle.py -clear_pairings      # Linux: sudo python3 csr_dongle.py -clear_pairings
 ```
 
-On macOS, also allow your terminal app under
-**System Settings → Privacy & Security → Input Monitoring**.
+Then unplug and replug the dongle. One of the two requests being rejected is normal (the dongle
+only accepts the variant that matches its configuration).
+
+> [!NOTE]
+> The macOS version is new and not yet confirmed on real hardware. An earlier hidapi-based version
+> sent the commands to the dongle's mouse interface instead, which left the dongle in a bad state;
+> if this one misbehaves, fall back to `btusbcmd.exe` on Windows.
 
 ## Using the dongle with a ZMK keyboard (`CONFIG_ZMK_BLE_DONGLE_COMPAT_PROFILE`)
 
