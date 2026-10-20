@@ -6,14 +6,15 @@ the kind used with this fork's `CONFIG_ZMK_BLE_DONGLE_COMPAT_PROFILE` option.
 It is a small port of the dongle vendor's
 [Windows](https://github.com/chancefavorsthepreparedmind/csr_clear_pairings_cmd) /
 [Linux](https://github.com/chancefavorsthepreparedmind/csr_clear_pairings_cmd-linux) command line
-tools: it sends the same two HID "SET FEATURE" requests, but through the OS HID stack (`hidapi`)
-instead of libusb, which on macOS cannot detach the system keyboard driver.
+tools: it sends the same two HID "SET FEATURE" requests, but through the OS HID stack (the
+`hidapi` C library, called directly from Python, so no pip packages are needed) instead of libusb,
+which on macOS cannot detach the system keyboard driver.
 
 ## Download and run
 
 ```bash
+brew install hidapi        # Linux: sudo apt install libhidapi-hidraw0
 curl -LO https://raw.githubusercontent.com/Micmonta/zmk/main/extras/csr-hid-proxy/csr_dongle.py
-pip3 install hidapi
 python3 csr_dongle.py -clear_pairings
 ```
 
