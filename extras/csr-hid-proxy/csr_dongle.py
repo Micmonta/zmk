@@ -84,6 +84,11 @@ def main() -> int:
         return 0
     cmd = COMMANDS[sys.argv[1]]
 
+    if sys.platform == "darwin":
+        print("WARNING: experimental on macOS. It can only reach the dongle's interface 1; in testing\n"
+              "the dongle then forgot its pairings but re-paired keyboards sent no keys until it was\n"
+              "cleared again with btusbcmd.exe on Windows. Prefer the Windows tool.\n")
+
     lib = load_hidapi()
     lib.hid_init()
     # macOS: hidapi opens devices exclusively ("seize") by default, which fails for a keyboard-type
