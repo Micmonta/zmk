@@ -68,6 +68,8 @@ def load_hidapi():
     lib.hid_send_feature_report.restype = ctypes.c_int
     lib.hid_send_feature_report.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t]
     lib.hid_close.argtypes = [ctypes.c_void_p]
+    lib.hid_error.restype = ctypes.c_wchar_p
+    lib.hid_error.argtypes = [ctypes.c_void_p]
     return lib
 
 
@@ -84,6 +86,11 @@ def main() -> int:
 
     lib = load_hidapi()
     lib.hid_init()
+    # macOS: hidapi opens devices exclusively ("seize") by default, which fails for a keyboard-type
+    # device macOS is already using. Open it shared instead (hidapi >= 0.12, macOS only).
+    if hasattr(lib, "hid_darwin_set_open_exclusive"):
+        lib.hid_darwin_set_open_exclusive.argtypes = [ctypes.c_int]
+        lib.hid_darwin_set_open_exclusive(0)
 
     head = lib.hid_enumerate(VID, PID)
     devices = []
@@ -97,14 +104,20 @@ def main() -> int:
     if not devices:
         print("CSR HID proxy dongle (0a12:100b) not found. Is it plugged in and in HID proxy mode?")
         return 1
-    # The original sends to interface 0; prefer that interface if it is listed separately.
-    iface, path, manufacturer, product = next((d for d in devices if d[0] == 0), devices[0])
-    print(f"Found: {manufacturer} {product} (interface {iface})")
+    # The original sends to interface 0; try that interface first, then any others.
+    devices.sort(key=lambda d: (d[0] != 0, d[0]))
 
-    dev = lib.hid_open_path(path)
+    dev = None
+    for iface, path, manufacturer, product in devices:
+        print(f"Found: {manufacturer} {product} (interface {iface})")
+        dev = lib.hid_open_path(path)
+        if dev:
+            break
+        print(f"  could not open interface {iface}: {lib.hid_error(None)}")
     if not dev:
         print("Could not open the dongle. On macOS, allow your terminal app under "
-              "System Settings -> Privacy & Security -> Input Monitoring, then retry.")
+              "System Settings -> Privacy & Security -> Input Monitoring (then quit and reopen the "
+              "terminal), or try again with sudo.")
         return 1
     try:
         # Composite-device variant: report ID 1, 9 bytes (wValue 0x0301).
