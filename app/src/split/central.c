@@ -55,6 +55,10 @@ int zmk_split_transport_central_peripheral_event_handler(
 #endif // IS_ENABLED(CONFIG_ZMK_POINTING)
 #if IS_ENABLED(CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING)
     case ZMK_SPLIT_TRANSPORT_PERIPHERAL_EVENT_TYPE_BATTERY_EVENT: {
+        if (source >= ZMK_SPLIT_CENTRAL_PERIPHERAL_COUNT) {
+            LOG_WRN("Ignoring battery event from invalid peripheral %d", source);
+            return -EINVAL;
+        }
         struct zmk_peripheral_battery_state_changed battery_ev = {
             .source = source,
             .state_of_charge = ev.data.battery_event.level,
