@@ -172,12 +172,13 @@ config ZMK_BLE_DONGLE_COMPAT_PROFILE
     default -1
     range -1 31
     help
-      Compatibility mode for a legacy BLE-to-USB "HID proxy" dongle (e.g. CSR-based) paired to
+      Compatibility mode for a legacy BLE-to-USB "HID proxy" dongle (e.g. CSR 8510 based) paired to
       one BLE profile. For that profile only:
       - legacy (pre-Bluetooth 4.2) pairing is accepted; all other profiles keep requiring
         LE Secure Connections,
-      - the mouse report is sent in a compact 8-bit layout (buttons, X, Y, wheel, pan) whose first
-        bytes match a boot mouse, instead of ZMK's 16-bit layout.
+      - the mouse is sent as report ID 2 in the dongle's own USB mouse layout (3 buttons,
+        16-bit X/Y, 8-bit wheel) and media keys move to report ID 3, following the
+        combo-keyboard convention these dongles expect (ID 1 keyboard, ID 2 mouse).
       USB and all other profiles are unchanged. Example: 4 = the 5th profile (BT_SEL 4).
 
 config ZMK_BLE_DONGLE_COMPAT

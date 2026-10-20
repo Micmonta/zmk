@@ -49,10 +49,15 @@ In the keyboard's central `.conf` (e.g. `config/toucan_left.conf`):
 CONFIG_ZMK_BLE_DONGLE_COMPAT_PROFILE=4   # BLE profile 5 (0-based index 4)
 ```
 
-For that profile only, the keyboard accepts the dongle's legacy pairing and sends 8-bit mouse
-reports. Other profiles keep LE Secure Connections and normal 16-bit mouse reports. Don't also set
+For that profile only, the keyboard accepts the dongle's legacy pairing and sends the mouse as
+report ID 2 in the dongle's own USB mouse layout (3 buttons, 16-bit X/Y, 8-bit wheel), with media
+keys moved to report ID 3. The dongle forwards report ID 1 (keyboard) and, by the usual
+combo-keyboard convention, report ID 2 (mouse). Other profiles are unchanged. Don't also set
 `CONFIG_ZMK_BLE_EXPERIMENTAL_PAIR_JUST_WORKS` (that allows legacy pairing on every profile).
 The status screen shows `HID` on that profile.
+
+The dongle has no media-key (consumer) interface, so volume / media keys can't work through it.
+Buttons 4/5 and horizontal scroll aren't supported by its mouse either.
 
 > [!NOTE]
 > Current status: typing works through the dongle; mouse movement (trackpad / mouse keys) does not
