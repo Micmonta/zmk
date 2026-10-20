@@ -639,6 +639,18 @@ static enum bt_security_err auth_pairing_accept(struct bt_conn *conn,
         return BT_SECURITY_ERR_PAIR_NOT_ALLOWED;
     }
 
+#if IS_ENABLED(CONFIG_ZMK_BLE_DONGLE_COMPAT) && !IS_ENABLED(CONFIG_ZMK_BLE_EXPERIMENTAL_PAIR_JUST_WORKS)
+    // Dongle compat enables legacy (non-Secure-Connections) pairing, but only for the dongle's
+    // profile; every other profile still requires LE Secure Connections. 0x08 is the SC bit of
+    // AuthReq (Core Spec Vol 3, Part H, 3.5.1).
+    if (info.role == BT_CONN_ROLE_PERIPHERAL && !(feat->auth_req & 0x08) &&
+        active_profile != CONFIG_ZMK_BLE_DONGLE_COMPAT_PROFILE) {
+        LOG_WRN("Rejecting legacy pairing on profile %d (only allowed on dongle profile %d)",
+                active_profile, CONFIG_ZMK_BLE_DONGLE_COMPAT_PROFILE);
+        return BT_SECURITY_ERR_AUTH_REQUIREMENT;
+    }
+#endif
+
     return BT_SECURITY_ERR_SUCCESS;
 };
 

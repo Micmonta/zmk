@@ -167,6 +167,24 @@ config ZMK_BLE_EXPERIMENTAL_ENABLE_LEGACY
     bool "Experimental BLE just works"
     default n
 
+config ZMK_BLE_DONGLE_COMPAT_PROFILE
+    int "BLE profile index (0-based) with legacy dongle compatibility, -1 to disable"
+    default -1
+    range -1 31
+    help
+      Compatibility mode for a legacy BLE-to-USB "HID proxy" dongle (e.g. CSR-based) paired to
+      one BLE profile. For that profile only:
+      - legacy (pre-Bluetooth 4.2) pairing is accepted; all other profiles keep requiring
+        LE Secure Connections,
+      - the mouse report is sent in a compact 8-bit layout (buttons, X, Y, wheel, pan) whose first
+        bytes match a boot mouse, instead of ZMK's 16-bit layout.
+      USB and all other profiles are unchanged. Example: 4 = the 5th profile (BT_SEL 4).
+
+config ZMK_BLE_DONGLE_COMPAT
+    bool
+    default y if ZMK_BLE_DONGLE_COMPAT_PROFILE >= 0 && (!ZMK_SPLIT || ZMK_SPLIT_ROLE_CENTRAL)
+    select ZMK_BLE_EXPERIMENTAL_ENABLE_LEGACY
+
 menuconfig ZMK_BLE
     bool "BLE (HID over GATT)"
     select BT
