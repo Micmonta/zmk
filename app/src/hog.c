@@ -13,8 +13,6 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/gatt.h>
-#include <zephyr/sys/util.h>
-#include <string.h>
 
 #include <zmk/ble.h>
 #include <zmk/endpoints_types.h>
@@ -102,199 +100,14 @@ static ssize_t read_hids_info(struct bt_conn *conn, const struct bt_gatt_attr *a
                              sizeof(struct hids_info));
 }
 
-#if IS_ENABLED(CONFIG_ZMK_BLE_DONGLE_COMPAT) && IS_ENABLED(CONFIG_ZMK_POINTING)
-#define ZMK_HOG_DONGLE_COMPAT_MOUSE 1
-
-/*
- * Dongle compat (CONFIG_ZMK_BLE_DONGLE_COMPAT_PROFILE): for the configured BLE profile only, the
- * HID layout is adapted for legacy BLE-to-USB "HID proxy" dongles (CSR 8510 based). Their USB side
- * has a keyboard (report ID 1, standard 8-byte layout, same as ZMK's) and a mouse with no report
- * ID: 3 buttons, 16-bit X/Y (-2048..2047), 8-bit wheel. They follow the combo-keyboard convention
- * of report ID 1 = keyboard, report ID 2 = mouse. So for that profile:
- * - the mouse uses report ID 2, in exactly the dongle's USB mouse layout,
- * - media keys (consumer) move from report ID 2 to report ID 3.
- * The keyboard report is unchanged.
- */
-#define COMPAT_REPORT_ID_MOUSE 0x02
-#define COMPAT_REPORT_ID_CONSUMER 0x03
-#define COMPAT_MOUSE_XY_MAX 2047
-#define COMPAT_MOUSE_WHEEL_MAX 127
-#define COMPAT_MOUSE_BUTTONS_MASK 0x07
-
-static const uint8_t compat_mouse_desc[] = {
-    HID_USAGE_PAGE(HID_USAGE_GD),
-    HID_USAGE(HID_USAGE_GD_MOUSE),
-    HID_COLLECTION(HID_COLLECTION_APPLICATION),
-    HID_REPORT_ID(COMPAT_REPORT_ID_MOUSE),
-    HID_USAGE(HID_USAGE_GD_POINTER),
-    HID_COLLECTION(HID_COLLECTION_PHYSICAL),
-    HID_USAGE_PAGE(HID_USAGE_BUTTON),
-    HID_USAGE_MIN8(0x1),
-    HID_USAGE_MAX8(0x3),
-    HID_LOGICAL_MIN8(0x00),
-    HID_LOGICAL_MAX8(0x01),
-    HID_REPORT_SIZE(0x01),
-    HID_REPORT_COUNT(0x03),
-    HID_INPUT(ZMK_HID_MAIN_VAL_DATA | ZMK_HID_MAIN_VAL_VAR | ZMK_HID_MAIN_VAL_ABS),
-    HID_REPORT_SIZE(0x05),
-    HID_REPORT_COUNT(0x01),
-    HID_INPUT(ZMK_HID_MAIN_VAL_CONST | ZMK_HID_MAIN_VAL_VAR | ZMK_HID_MAIN_VAL_ABS),
-    HID_USAGE_PAGE(HID_USAGE_GEN_DESKTOP),
-    HID_USAGE(HID_USAGE_GD_X),
-    HID_USAGE(HID_USAGE_GD_Y),
-    HID_LOGICAL_MIN16(0x00, 0xF8), // -2048
-    HID_LOGICAL_MAX16(0xFF, 0x07), // 2047
-    HID_REPORT_SIZE(0x10),
-    HID_REPORT_COUNT(0x02),
-    HID_INPUT(ZMK_HID_MAIN_VAL_DATA | ZMK_HID_MAIN_VAL_VAR | ZMK_HID_MAIN_VAL_REL),
-    HID_USAGE(HID_USAGE_GD_WHEEL),
-    HID_LOGICAL_MIN8(0x81),
-    HID_LOGICAL_MAX8(0x7F),
-    HID_REPORT_SIZE(0x08),
-    HID_REPORT_COUNT(0x01),
-    HID_INPUT(ZMK_HID_MAIN_VAL_DATA | ZMK_HID_MAIN_VAL_VAR | ZMK_HID_MAIN_VAL_REL),
-    HID_END_COLLECTION,
-    HID_END_COLLECTION,
-};
-
-// Same byte layout as the dongle's USB mouse report (little-endian 16-bit X/Y).
-struct zmk_hog_compat_mouse_report_body {
-    uint8_t buttons;
-    int16_t d_x;
-    int16_t d_y;
-    int8_t d_scroll_y;
-} __packed;
-
-// Normal report map with the consumer report ID changed and the (last) mouse collection replaced.
-static uint8_t compat_report_map[sizeof(zmk_hid_report_desc) + sizeof(compat_mouse_desc)];
-static size_t compat_report_map_len;
-
-static void build_compat_report_map(void) {
-    // Start of ZMK's mouse collection (the last one): Usage Page (GD), Usage (Mouse),
-    // Collection (Application), Report ID (mouse).
-    static const uint8_t mouse_marker[] = {0x05, 0x01, 0x09, 0x02,
-                                           0xA1, 0x01, 0x85, ZMK_HID_REPORT_ID_MOUSE};
-    // Start of ZMK's consumer collection: Usage Page (Consumer), Usage (Consumer Control),
-    // Collection (Application), Report ID (consumer).
-    static const uint8_t consumer_marker[] = {0x05, 0x0C, 0x09, 0x01,
-                                              0xA1, 0x01, 0x85, ZMK_HID_REPORT_ID_CONSUMER};
-    size_t mouse_at = SIZE_MAX, consumer_at = SIZE_MAX;
-
-    for (size_t i = 0; i + sizeof(mouse_marker) <= sizeof(zmk_hid_report_desc); i++) {
-        if (consumer_at == SIZE_MAX &&
-            memcmp(&zmk_hid_report_desc[i], consumer_marker, sizeof(consumer_marker)) == 0) {
-            consumer_at = i;
-        }
-        if (memcmp(&zmk_hid_report_desc[i], mouse_marker, sizeof(mouse_marker)) == 0) {
-            mouse_at = i;
-        }
-    }
-    if (mouse_at == SIZE_MAX || consumer_at == SIZE_MAX || consumer_at > mouse_at) {
-        LOG_ERR("Dongle compat: unexpected report map layout; compat mouse disabled");
-        return;
-    }
-
-    memcpy(compat_report_map, zmk_hid_report_desc, mouse_at);
-    compat_report_map[consumer_at + sizeof(consumer_marker) - 1] = COMPAT_REPORT_ID_CONSUMER;
-    memcpy(&compat_report_map[mouse_at], compat_mouse_desc, sizeof(compat_mouse_desc));
-    compat_report_map_len = mouse_at + sizeof(compat_mouse_desc);
-}
-
-static bool is_dongle_compat_conn(struct bt_conn *conn) {
-    if (conn == NULL || compat_report_map_len == 0) {
-        return false;
-    }
-    int profile = zmk_ble_profile_index(bt_conn_get_dst(conn));
-    if (profile < 0) {
-        // Not bonded yet (mid-pairing): the profile being paired is the active one.
-        profile = zmk_ble_active_profile_index();
-    }
-    return profile == CONFIG_ZMK_BLE_DONGLE_COMPAT_PROFILE;
-}
-
-// Takes up to +/-max from *value (the rest stays for the next report).
-static int16_t compat_take(int16_t *value, int16_t max) {
-    int16_t chunk = CLAMP(*value, -max, max);
-    *value -= chunk;
-    return chunk;
-}
-
-/*
- * Boot-protocol characteristics for the dongle. A USB-logging capture showed the dongle never reads
- * the report map: before pairing it looks up the Boot Keyboard Input (0x2A22) and Boot Mouse Input
- * (0x2A33) characteristics, then only reads the report references. It forwards report ID 1 as the
- * keyboard, and drops every report-mode mouse layout tried. So the compat build also exposes the
- * boot characteristics and, on the compat profile, sends to them when the dongle subscribes.
- * Normal hosts use report mode and ignore them.
- */
-#if IS_ENABLED(CONFIG_ZMK_HID_REPORT_TYPE_HKRO) && CONFIG_ZMK_HID_KEYBOARD_REPORT_SIZE == 6
-// ZMK's 6-key report body is byte-for-byte the boot keyboard report.
-#define ZMK_HOG_COMPAT_BOOT_KB 1
-#endif
-
-#define COMPAT_BOOT_MOUSE_MAX 127
-
-// Boot mouse report: buttons, X, Y (8-bit), plus the common optional wheel byte.
-struct zmk_hog_compat_boot_mouse_report {
-    uint8_t buttons;
-    int8_t d_x;
-    int8_t d_y;
-    int8_t d_wheel;
-} __packed;
-
-// The dongle looks the boot characteristics up before pairing, so they are readable without
-// encryption; the value is only returned once the link is encrypted.
-static bool compat_link_encrypted(struct bt_conn *conn) {
-    return conn != NULL && bt_conn_get_security(conn) >= BT_SECURITY_L2;
-}
-
-#if defined(ZMK_HOG_COMPAT_BOOT_KB)
-static ssize_t read_hids_boot_kb_input(struct bt_conn *conn, const struct bt_gatt_attr *attr,
-                                       void *buf, uint16_t len, uint16_t offset) {
-    struct zmk_hid_keyboard_report_body report = {0};
-    if (compat_link_encrypted(conn)) {
-        report = zmk_hid_get_keyboard_report()->body;
-    }
-    return bt_gatt_attr_read(conn, attr, buf, len, offset, &report, sizeof(report));
-}
-#endif
-
-static ssize_t read_hids_boot_mouse_input(struct bt_conn *conn, const struct bt_gatt_attr *attr,
-                                          void *buf, uint16_t len, uint16_t offset) {
-    struct zmk_hog_compat_boot_mouse_report report = {0};
-    if (compat_link_encrypted(conn)) {
-        report.buttons = zmk_hid_get_mouse_report()->body.buttons & COMPAT_MOUSE_BUTTONS_MASK;
-    }
-    return bt_gatt_attr_read(conn, attr, buf, len, offset, &report, sizeof(report));
-}
-
-#endif // IS_ENABLED(CONFIG_ZMK_BLE_DONGLE_COMPAT) && IS_ENABLED(CONFIG_ZMK_POINTING)
-
 static ssize_t read_hids_report_ref(struct bt_conn *conn, const struct bt_gatt_attr *attr,
                                     void *buf, uint16_t len, uint16_t offset) {
-#if defined(ZMK_HOG_DONGLE_COMPAT_MOUSE)
-    if (is_dongle_compat_conn(conn)) {
-        struct hids_report compat = *(const struct hids_report *)attr->user_data;
-        if (attr->user_data == &mouse_input) {
-            compat.id = COMPAT_REPORT_ID_MOUSE;
-        } else if (attr->user_data == &consumer_input) {
-            compat.id = COMPAT_REPORT_ID_CONSUMER;
-        }
-        return bt_gatt_attr_read(conn, attr, buf, len, offset, &compat, sizeof(compat));
-    }
-#endif
     return bt_gatt_attr_read(conn, attr, buf, len, offset, attr->user_data,
                              sizeof(struct hids_report));
 }
 
 static ssize_t read_hids_report_map(struct bt_conn *conn, const struct bt_gatt_attr *attr,
                                     void *buf, uint16_t len, uint16_t offset) {
-#if defined(ZMK_HOG_DONGLE_COMPAT_MOUSE)
-    if (is_dongle_compat_conn(conn)) {
-        return bt_gatt_attr_read(conn, attr, buf, len, offset, compat_report_map,
-                                 compat_report_map_len);
-    }
-#endif
     return bt_gatt_attr_read(conn, attr, buf, len, offset, zmk_hid_report_desc,
                              sizeof(zmk_hid_report_desc));
 }
@@ -347,18 +160,6 @@ static ssize_t read_hids_consumer_input_report(struct bt_conn *conn,
 static ssize_t read_hids_mouse_input_report(struct bt_conn *conn, const struct bt_gatt_attr *attr,
                                             void *buf, uint16_t len, uint16_t offset) {
     struct zmk_hid_mouse_report_body *report_body = &zmk_hid_get_mouse_report()->body;
-#if defined(ZMK_HOG_DONGLE_COMPAT_MOUSE)
-    if (is_dongle_compat_conn(conn)) {
-        int16_t x = report_body->d_x, y = report_body->d_y, sy = report_body->d_scroll_y;
-        struct zmk_hog_compat_mouse_report_body compat = {
-            .buttons = report_body->buttons & COMPAT_MOUSE_BUTTONS_MASK,
-            .d_x = compat_take(&x, COMPAT_MOUSE_XY_MAX),
-            .d_y = compat_take(&y, COMPAT_MOUSE_XY_MAX),
-            .d_scroll_y = (int8_t)compat_take(&sy, COMPAT_MOUSE_WHEEL_MAX),
-        };
-        return bt_gatt_attr_read(conn, attr, buf, len, offset, &compat, sizeof(compat));
-    }
-#endif
     return bt_gatt_attr_read(conn, attr, buf, len, offset, report_body,
                              sizeof(struct zmk_hid_mouse_report_body));
 }
@@ -497,45 +298,7 @@ BT_GATT_SERVICE_DEFINE(
 #endif // IS_ENABLED(CONFIG_ZMK_HID_INDICATORS)
 
     BT_GATT_CHARACTERISTIC(BT_UUID_HIDS_CTRL_POINT, BT_GATT_CHRC_WRITE_WITHOUT_RESP,
-                           BT_GATT_PERM_WRITE, NULL, write_ctrl_point, &ctrl_point),
-
-#if defined(ZMK_HOG_DONGLE_COMPAT_MOUSE)
-// Dongle compat boot characteristics, last so the handles of the attributes above don't change.
-#if defined(ZMK_HOG_COMPAT_BOOT_KB)
-    BT_GATT_CHARACTERISTIC(BT_UUID_HIDS_BOOT_KB_IN_REPORT, BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
-                           BT_GATT_PERM_READ, read_hids_boot_kb_input, NULL, NULL),
-    BT_GATT_CCC(input_ccc_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE_ENCRYPT),
-#endif
-    BT_GATT_CHARACTERISTIC(BT_UUID_HIDS_BOOT_MOUSE_IN_REPORT,
-                           BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
-                           read_hids_boot_mouse_input, NULL, NULL),
-    BT_GATT_CCC(input_ccc_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE_ENCRYPT),
-#endif
-);
-
-#if defined(ZMK_HOG_DONGLE_COMPAT_MOUSE)
-// Value attributes of the boot characteristics (found at init).
-static const struct bt_gatt_attr *compat_boot_kb_attr;
-static const struct bt_gatt_attr *compat_boot_mouse_attr;
-
-static void find_compat_boot_attrs(void) {
-    for (size_t i = 0; i < hog_svc.attr_count; i++) {
-#if defined(ZMK_HOG_COMPAT_BOOT_KB)
-        if (hog_svc.attrs[i].read == read_hids_boot_kb_input) {
-            compat_boot_kb_attr = &hog_svc.attrs[i];
-        }
-#endif
-        if (hog_svc.attrs[i].read == read_hids_boot_mouse_input) {
-            compat_boot_mouse_attr = &hog_svc.attrs[i];
-        }
-    }
-}
-
-// True if the dongle subscribed to this boot characteristic on this connection.
-static bool compat_boot_subscribed(struct bt_conn *conn, const struct bt_gatt_attr *attr) {
-    return attr != NULL && bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY);
-}
-#endif
+                           BT_GATT_PERM_WRITE, NULL, write_ctrl_point, &ctrl_point));
 
 K_THREAD_STACK_DEFINE(hog_q_stack, CONFIG_ZMK_BLE_THREAD_STACK_SIZE);
 
@@ -565,21 +328,6 @@ void send_keyboard_report_callback(struct k_work *work) {
         } else if (err) {
             LOG_DBG("Error notifying %d", err);
         }
-
-#if defined(ZMK_HOG_COMPAT_BOOT_KB)
-        // Dongle compat: also send the (identical) boot keyboard report if the dongle uses it.
-        if (is_dongle_compat_conn(conn) && compat_boot_subscribed(conn, compat_boot_kb_attr)) {
-            struct bt_gatt_notify_params boot_params = {
-                .attr = compat_boot_kb_attr,
-                .data = &report,
-                .len = sizeof(report),
-            };
-            err = bt_gatt_notify_cb(conn, &boot_params);
-            if (err) {
-                LOG_DBG("Error notifying boot keyboard %d", err);
-            }
-        }
-#endif
 
         bt_conn_unref(conn);
     }
@@ -665,63 +413,6 @@ int zmk_hog_send_consumer_report(struct zmk_hid_consumer_report_body *report) {
 K_MSGQ_DEFINE(zmk_hog_mouse_msgq, sizeof(struct zmk_hid_mouse_report_body),
               CONFIG_ZMK_BLE_MOUSE_REPORT_QUEUE_SIZE, 4);
 
-#if defined(ZMK_HOG_DONGLE_COMPAT_MOUSE)
-// Sends one ZMK mouse report to the dongle-compat profile in the dongle's own mouse layout (one or
-// more reports: movement beyond the X/Y or wheel range is split, so no distance is lost).
-// Horizontal scroll and buttons 4/5 are not supported by the dongle and are dropped.
-static void send_compat_mouse_report(struct bt_conn *conn,
-                                     const struct zmk_hid_mouse_report_body *report) {
-    int16_t x = report->d_x, y = report->d_y, sy = report->d_scroll_y;
-
-    if (compat_boot_subscribed(conn, compat_boot_mouse_attr)) {
-        // Boot mouse report (what the dongle actually uses): 8-bit X/Y/wheel, split as needed.
-        do {
-            struct zmk_hog_compat_boot_mouse_report boot = {
-                .buttons = report->buttons & COMPAT_MOUSE_BUTTONS_MASK,
-                .d_x = (int8_t)compat_take(&x, COMPAT_BOOT_MOUSE_MAX),
-                .d_y = (int8_t)compat_take(&y, COMPAT_BOOT_MOUSE_MAX),
-                .d_wheel = (int8_t)compat_take(&sy, COMPAT_BOOT_MOUSE_MAX),
-            };
-            struct bt_gatt_notify_params notify_params = {
-                .attr = compat_boot_mouse_attr,
-                .data = &boot,
-                .len = sizeof(boot),
-            };
-
-            int err = bt_gatt_notify_cb(conn, &notify_params);
-            if (err) {
-                LOG_DBG("Error notifying boot mouse %d", err);
-                return;
-            }
-        } while (x != 0 || y != 0 || sy != 0);
-        return;
-    }
-
-    do {
-        struct zmk_hog_compat_mouse_report_body compat = {
-            .buttons = report->buttons & COMPAT_MOUSE_BUTTONS_MASK,
-            .d_x = compat_take(&x, COMPAT_MOUSE_XY_MAX),
-            .d_y = compat_take(&y, COMPAT_MOUSE_XY_MAX),
-            .d_scroll_y = (int8_t)compat_take(&sy, COMPAT_MOUSE_WHEEL_MAX),
-        };
-        struct bt_gatt_notify_params notify_params = {
-            .attr = &hog_svc.attrs[13],
-            .data = &compat,
-            .len = sizeof(compat),
-        };
-
-        int err = bt_gatt_notify_cb(conn, &notify_params);
-        if (err == -EPERM) {
-            bt_conn_set_security(conn, BT_SECURITY_L2);
-            return;
-        } else if (err) {
-            LOG_DBG("Error notifying %d", err);
-            return;
-        }
-    } while (x != 0 || y != 0 || sy != 0);
-}
-#endif
-
 void send_mouse_report_callback(struct k_work *work) {
     struct zmk_hid_mouse_report_body report;
     while (k_msgq_get(&zmk_hog_mouse_msgq, &report, K_NO_WAIT) == 0) {
@@ -729,14 +420,6 @@ void send_mouse_report_callback(struct k_work *work) {
         if (conn == NULL) {
             return;
         }
-
-#if defined(ZMK_HOG_DONGLE_COMPAT_MOUSE)
-        if (is_dongle_compat_conn(conn)) {
-            send_compat_mouse_report(conn, &report);
-            bt_conn_unref(conn);
-            continue;
-        }
-#endif
 
         struct bt_gatt_notify_params notify_params = {
             .attr = &hog_svc.attrs[13],
@@ -783,11 +466,6 @@ static int zmk_hog_init(void) {
     static const struct k_work_queue_config queue_config = {.name = "HID Over GATT Send Work"};
     k_work_queue_start(&hog_work_q, hog_q_stack, K_THREAD_STACK_SIZEOF(hog_q_stack),
                        CONFIG_ZMK_BLE_THREAD_PRIORITY, &queue_config);
-
-#if defined(ZMK_HOG_DONGLE_COMPAT_MOUSE)
-    build_compat_report_map();
-    find_compat_boot_attrs();
-#endif
 
     return 0;
 }
